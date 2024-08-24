@@ -35,7 +35,8 @@ fuzzy_replacements = {
     r'[-]': '',
     # r'[1]': 'I',
     r'[1|]': 'I',
-    r'[\s]': ''
+    r'[\s]': '',
+    r'B00': 'B0',
 }
 
 
@@ -44,6 +45,9 @@ def fuzz(text):
     for k, v in fuzzy_replacements.items():
         text = re.sub(k, v, text)
     text = re.sub(r'II+', 'I', text)
+    if text.endswith("I"):
+        text = text[:-1] + "L"
+
     return text
 
 def preprocess_image(image: Image) -> Image:
@@ -137,7 +141,15 @@ def parse_label_pdf(label_file_name: str) -> List[ShippingLabel]:
 
     print(f"Total pages parsed: {len(page_images)}")
     for i, page in tqdm(enumerate(page_images), "Reading reference numbers...", total=len(page_images)):
-        refs.append(ShippingLabel(i, MAX_LABEL_NUMBER, read_reference_number_usps(page)))
+        ref_number = read_reference_number_usps(page)
+        if ref_number == "":
+            ref_number = read_reference_number_ups(page)
+
+        print(i, ref_number)
+        refs.append(ShippingLabel(i, MAX_LABEL_NUMBER, ref_number))
+        
+        
+        # refs.append(ShippingLabel(i, MAX_LABEL_NUMBER, read_reference_number_usps(page)))
     return refs
 
 def read_reference_number(image: Image, coords: Tuple[int, int, int, int]) -> str:
@@ -151,12 +163,19 @@ def read_reference_number(image: Image, coords: Tuple[int, int, int, int]) -> st
     text = str(pytesseract.image_to_string(padded_image,
                                            config='''-c tessedit_char_whitelist="Trx Ref No.: 1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ-" --dpi 500 --psm 6'''))
     text = re.sub(r'[^A-Z0-9]+$', '', text)
-    text = re.split(r'-\s*\d+[^xX]*[xX]\s*', text)[-1]
+    print("step1=", text)
+
+    # text = re.split(r'-\s*\d+[^xX]*[xX]\s*', text)[-1]
+    text = re.split(r'-\s*\d*[^xXyY]*[xXI1]\s*', text)[-1]
+
+
+    print("step2=", text)
     text = re.sub(r'\s', '', text)
+    print("step3=", text)
     return fuzz(text.upper())
 
 def read_reference_number_ups(image: Image) -> str:
-    coords = (0, 2820, 1500, 2970)
+    coords = (0, 380, 1437, 500)
     return read_reference_number(image, coords)
 
 def read_reference_number_usps(image: Image) -> str:
