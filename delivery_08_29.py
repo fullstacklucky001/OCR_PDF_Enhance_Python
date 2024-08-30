@@ -7,20 +7,20 @@ import pdf2image
 import pytesseract
 import tabula
 from PIL import Image
-from PyPDF2 import PdfWriter, PdfReader
+# from PyPDF2 import PdfWriter, PdfReader
+from PyPDF2 import PdfFileWriter, PdfFileReader
 from collections import defaultdict
 import re
 import pandas as pd
 from tqdm import tqdm
 from PIL import ImageEnhance, ImageFilter
-import Levenshtein
 
 # Arbitrarily large integer for sorting rank
 MAX_LABEL_NUMBER = 1000000
 DEFAULT_CONVERSION_FILE = 'Conversion File.xlsx'
 
-poppler_path = "C:/Users/Administrator/Downloads/Release-24.07.0-0/poppler-24.07.0/Library/bin/"
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# poppler_path = "C:/Users/Administrator/Downloads/Release-24.07.0-0/poppler-24.07.0/Library/bin/"
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 @dataclass
 class ShippingLabel:
@@ -51,21 +51,17 @@ def fuzz(text):
     # Exception: Replace 'Z2' with '20'
     if text.endswith("Z2"):
         text = text[:-2] + "20"
+
     return text
 
 def preprocess_image(image: Image) -> Image:
-    # Convert to grayscale
     image = image.convert('L')
-    # Enhance contrast
     enhancer = ImageEnhance.Contrast(image)
     image = enhancer.enhance(3)
-    # Apply a filter to reduce noise
     image = image.filter(ImageFilter.MedianFilter())
     return image
 
 def get_packing_rank(upc_ref, packing_order):
-
-    print(f"upc_ref={upc_ref}, result={packing_order[upc_ref]}")
     return packing_order[upc_ref]
 
 def sort_slips(pick_list_path, shipping_label_path, conversion_file_path) -> List[ShippingLabel]:
@@ -74,8 +70,6 @@ def sort_slips(pick_list_path, shipping_label_path, conversion_file_path) -> Lis
     
     packing_order = defaultdict(lambda: MAX_LABEL_NUMBER)
     upc_lookup = read_conversion(conversion_file_path)
-
-    print("upc_lookup=", upc_lookup)
 
     i = 0
     for table in pick_list:
@@ -87,47 +81,18 @@ def sort_slips(pick_list_path, shipping_label_path, conversion_file_path) -> Lis
 
     slips = parse_label_pdf(shipping_label_path)
 
-    total_labels = len(slips)
-    print(f"Total labels parsed: {total_labels}")
-
     unmatched_labels = []
     for label in tqdm(slips, desc="Processing labels"):
         fuzzed_ref = fuzz(label.upc_ref)
-        print(f"label.upc_ref={label.upc_ref}, fuzzed_ref={fuzzed_ref}")
         if fuzzed_ref in upc_lookup:
             label.upc_ref = upc_lookup[fuzzed_ref]
         else:
-            # label.upc_ref = label.upc_ref
             unmatched_labels.append(label)
-
-             # Try approximate match
-            # best_match = None
-            # best_distance = float('inf')
-            # for key in upc_lookup.keys():
-            #     distance = Levenshtein.distance(fuzzed_ref, key)
-            #     if distance < best_distance:
-            #         best_match = key
-            #         best_distance = distance
-            
-            # # If a close enough match is found, use it
-            # if best_distance <= 1:  # Adjust threshold as needed
-            #     label.upc_ref = upc_lookup[best_match]
-            # else:
-            #     unmatched_labels.append(label)
         
-        # label.pick_list_rank = get_packing_rank(label.upc_ref, packing_order)
         label.pick_list_rank = get_packing_rank(fuzz(label.upc_ref), packing_order)
-        if label.pick_list_rank == MAX_LABEL_NUMBER:
-            print(f"Unmatched label: {label.upc_ref}, Original: {label.upc_ref}, PDF Index: {label.pdf_index}")
-
-    if unmatched_labels:
-        print(f"Unmatched labels: {len(unmatched_labels)}")
-        # for label in unmatched_labels:
-        #     print(f"Unmatched label: {label}")
 
     # Sort all slips, unmatched ones will get the MAX_LABEL_NUMBER rank and go to the end
     all_slips = sorted(slips, key=lambda label: (label.pick_list_rank, label.pdf_index))
-    print(f"Total sorted labels: {len(all_slips)}")
     return all_slips
 
 # Read in the UPC conversion file
@@ -141,20 +106,13 @@ def read_conversion(conversion_file_path) -> Dict[str, str]:
 # Parse the entire label pdf into a list of labels
 def parse_label_pdf(label_file_name: str) -> List[ShippingLabel]:
     refs = []
-    print(f"Loading {label_file_name}...")
-    page_images = pdf2image.convert_from_path(label_file_name, dpi=500, grayscale=True, thread_count=10, poppler_path=poppler_path)
+    page_images = pdf2image.convert_from_path(label_file_name, dpi=500, grayscale=True, thread_count=10)
 
-    print(f"Total pages parsed: {len(page_images)}")
     for i, page in tqdm(enumerate(page_images), "Reading reference numbers...", total=len(page_images)):
         ref_number = read_reference_number_usps(page)
         if ref_number == "":
             ref_number = read_reference_number_ups(page)
-
-        print(i, ref_number)
         refs.append(ShippingLabel(i, MAX_LABEL_NUMBER, ref_number))
-        
-        
-        # refs.append(ShippingLabel(i, MAX_LABEL_NUMBER, read_reference_number_usps(page)))
     return refs
 
 def read_reference_number(image: Image, coords: Tuple[int, int, int, int]) -> str:
@@ -168,15 +126,8 @@ def read_reference_number(image: Image, coords: Tuple[int, int, int, int]) -> st
     text = str(pytesseract.image_to_string(padded_image,
                                            config='''-c tessedit_char_whitelist="Trx Ref No.: 1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ-" --dpi 500 --psm 6'''))
     text = re.sub(r'[^A-Z0-9]+$', '', text)
-    # print("step1=", text)
-
-    # text = re.split(r'-\s*\d+[^xX]*[xX]\s*', text)[-1]
     text = re.split(r'-\s*\d*[^xXyY]*[xXI1]\s*', text)[-1]
-
-
-    # print("step2=", text)
     text = re.sub(r'\s', '', text)
-    # print("step3=", text)
     return fuzz(text.upper())
 
 def read_reference_number_ups(image: Image) -> str:
@@ -188,11 +139,10 @@ def read_reference_number_usps(image: Image) -> str:
     return read_reference_number(image, coords)
 
 def write_pdf(slips: List[ShippingLabel], labels_pdf_path: str, output_path: str) -> None:
-    output_writer = PdfWriter()
-    input_reader = PdfReader(labels_pdf_path)
-    for slip in slips:
-        print("slip:", slip)
-        output_writer.add_page(input_reader.pages[slip.pdf_index])
+    output_writer = PdfFileWriter()
+    input_reader = PdfFileReader(labels_pdf_path)
+    for i, slip in enumerate(slips):
+        output_writer.addPage(input_reader.getPage(slip.pdf_index))
         if slip.pick_list_rank >= MAX_LABEL_NUMBER:
             print(f"Slip {slip.pdf_index + 1} cannot be matched. Appended as page {slips.index(slip) + 1}")
 
@@ -234,7 +184,6 @@ def Main():
         args.conversionFile = os.path.join(os.path.abspath(os.path.dirname(__file__)), args.conversionFile)
 
     sorted_slips = sort_slips(args.pickList, args.shippingLabels, args.conversionFile)
-    print(f"Final sorted slips count: {len(sorted_slips)}")
     write_pdf(sorted_slips, args.shippingLabels, args.outputFile)
     print(f"Ordered list written at {args.outputFile}")
 
